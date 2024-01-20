@@ -1,0 +1,1596 @@
+---
+title: "Predicting MLB All-Stars Players Based On Performance"
+author: "Kyle Bistrain and Nicholas Schaefer"
+format: 
+  html:
+    code-fold: true
+    code-line-numbers: true
+    code-tools: true
+    self-contained: true
+editor: visual
+execute:
+  message: false
+  error: true
+---
+
+# Predicting MLB All-Stars Players Based On Performance
+
+# 1. Introduction
+
+The Major League Baseball (MLB) All-Star Game is an annual baseball game between the "All-Stars," or top-performers, of the two regional leagues of the MLB, the American League (AL) and the National League (NL), to mark the halfway point of the season. Starting players are selected by the fans through what's called an "All-Star Final Vote," an internet- and text message-based ballot. Pitchers are chosen by each team's manager, and reserve players are selected by players and managers alike.
+
+While we are aware that subjective player and team favoritism can and will skew the players that end up on the All-Stars Team, especially for the starting players, we hypothesize that a player's performance is the main predictor for whether a player will be voted/selected onto the All-Stars Team.
+
+Using two datasets from Kaggle (Vinco, 2023), one containing batting and the other pitching statistics for every MLB player of the 2022 season, our project's primary objective is to develop a statistical learning model that predicts whether a player will make the All-Stars Team based on his performance in the previous season.
+
+The batting statistics dataset contains 992 rows and 29 columns of a batter's most important performance metrics, such as: "At-bat" (AB), or how often a batter gets to bat, "Runs Batted In" (RBI), how often a batter makes a play that allows runs to be scored, and "Batting Average" (BA), the number of "Hits" divided by the number of At-Bats. The pitching dataset is comprised of 1081 rows and 35 columns, similarly containing the most crucial evaluation metrics for pitchers, such as "Earned Run Average" (ERA), "Innings Pitched" (IP), and many more. Please refer to the following website for an overview of all metrics used and their meaning: <https://www.mlb.com/glossary/standard-stats>.
+
+This analysis will be especially insightful for team managers and coaches, who can use the model to make informed decisions about player selection for the upcoming season and allocate resources for the most promising players. Secondarily, the model could be used by Fantasy Baseball enthusiasts to inform draft decisions and detect players that are most likely to stand out statistically.
+
+The performance of our models is highly dependent on the quality of the data we have. Due to the fact that baseball has become a highly data-driven sport, we can be assured of the integrity of the datasets. Data quality and accuracy are in the best interest of every team. During the game, the teams use high-resolution cameras to capture dozens of data points, for instance, a player's base-to-base running speed, pitching velocity, the spin of each pitched ball, and many more (Merrimack College, 2021). In addition to that, every team receives daily play-by-play statistics from "Statcast," the MLB-owned data service (Merrimack College, 2021).
+
+But even a well-performing model trained on well-documented data can have some adversary ethical implications. For instance, a player deemed to not be an All-Star player in the upcoming season by the model might receive fewer resources and attention from the team, which might have a lasting impact on their career.
+
+# 2. Previous Work
+
+## 2.1. World Series Predictions (Micah Melling, 2021)
+
+The article discusses the use of a machine learning model to predict the probability of each team winning the World Series of the MLB. The model utilizes team and roster statistics data from 1905-2016 for training and 2017-2020 for validation purposes. Features include postseason results, winning percentages over the previous five years, median OPS, median ERA, average age of pitchers and batters, and the number of all-star appearances.
+
+The author ran a series of tree-based models and found the XGBoost model to be the best-performing one with an ROC-AUC of 0.8.
+
+## 2.2. Using Machine Learning to Predict Baseball Hall of Famers (Micah Melling, 2017)
+
+The article centers around the development of a machine learning model to predict baseball players' induction into the MLB Hall of Fame. The author utilizes data from the Lahman database, focusing on position players and excluding those selected for historical purposes. The dataset spans 716 players, with 137 inducted into the HoF. Features include player statistics, awards, World Series titles, and other relevant attributes.
+
+The author utilizes classification models to predict whether a player will be inducted into the Hall of Fame or not and regression models to predict the average percentage of votes a player will receive. Out of all classification models, the author found the random forest model to be the best-performing one with an ROC AUC of 0.926. For the regression models, the Lasso regression achieved the lowest RMSE on the test set.
+
+Out of all features, the author found the number of All-Star appearances and batting average to be the most significant ones in predicting whether a player will be inducted into the Hall of Fame or not.
+
+## 2.3. What Makes Our Project Novel?
+
+What makes our project novel is the focus of it. Although our project might be less holistic than some of the others described above, as far as our research went, there was no other project interested in identifying whether a player makes the All-Star Team or not. However, the second article clearly shows the importance of making the All-Star Team, which makes the scope of our project, albeit niche, a crucial one. Our results also offer insights into the sports betting realm. Gambling companies could use our models to create betting spreads and determine the risk to reward ratios.
+
+# 3. Exploratory Analysis
+
+```{r}
+#| label: libraries-r
+#| include: false
+library(here)
+library(stringr)
+library(tidyverse)
+library(tidymodels)
+library(kknn)
+library(glmnet)
+library(discrim)
+library(rpart)
+library(rpart.plot)
+library(baguette)
+library(leaps)
+library(plotly)
+library(ggcorrplot)
+library(gt)
+library(reticulate)
+
+#reticulate::py_install(c("pandas","numpy","keras_tuner"))
+
+#pandas <- import('pandas')
+
+#py_discover_config('keras_tuner')
+set.seed(12244)
+```
+
+```{r}
+#| message: false
+#| output: false
+
+batting_2022 <- read_delim('/Users/nicholas/Desktop/Cal Poly SLO/2. 2023 - Fall/STAT551 - Statistical Learning with R/12. Final Project/Project Checkpoint 2/Data/2022 MLB Player Stats - Batting.csv', delim = ";") 
+
+pitching_2022 <- read_delim('/Users/nicholas/Desktop/Cal Poly SLO/2. 2023 - Fall/STAT551 - Statistical Learning with R/12. Final Project/Project Checkpoint 2/Data/2022 MLB Player Stats - Pitching.csv', delim = ";") 
+
+allstars_bat2023 <- c("Sean Murphy","Freddie Freeman","Luis Arraez","Nolan Arenado", "Orlando Arcia","Ronald Acuna Jr","Mookie Betts","Corbin Carroll","J D  Martinez", "Jonah Heim","Yandy D az","Marcus Semien","Josh Jung","Corey Seager","Randy Arozarena", "Aaron Judge","Mike Trout", "Shohei Ohtani", "Elias D az","Will Smith","Pete Alonso","Matt Olson","Ozzie Albies","Austin Riley","Geraldo Perdomo","Dansby Swanson","Nick Castellanos","Lourdes Gurriel Jr","Juan Soto","Jorge Soler","Salvador Perez","Adley Rutschman", "Vladimir Guerrero Jr","Whit Merrifield", "Jos Ram rez","","Bo Bichette","Wander Franco", "Yordan Alvarez", "Adolis Garc a", "Austin Hays", "Luis Robert Jr", "Julio Rodr guez", "Kyle Tucker", "Brent Rooker")
+
+allstars_pit2023 <- c("David Bednar","Corbin Burnes","Alex Cobb","Alexis D az", "Camilo Doval","Bryce Elder","Zac Gallen","Josiah Gray","Josh Hader", "Mitch Keller","Clayton Kershaw","Craig Kimbrel","Kodai Senga","Justin Steele","Spencer Strider", "Marcus Stroman","Devin Williams","F lix Bautista","Yennier Cano","Luis Castillo","Emmanuel Clase", "Gerrit Cole", "Nathan Eovaldi", "Carlos Est vez","Sonny Gray","Kevin Gausman","Kenley Jansen","George Kirby","Pablo L pez","Michael Lorenzen", "Shane McClanahan", "Shohei Ohtani","Jordan Romano","Framber Valdez")
+
+sum(is.na(batting_2022))
+sum(is.na(pitching_2022))
+
+batting_2022 <- batting_2022 %>% 
+  mutate(Name = str_replace_all(Name,"[^[:alnum:]]", " "),
+         Name = str_trim(Name)) 
+pitching_2022 <- pitching_2022 %>% 
+  mutate(Name = str_replace_all(Name,"[^[:alnum:]]", " "),
+         Name = str_trim(Name)) 
+```
+
+```{r}
+pitching_2022_num <- pitching_2022 %>%
+  group_by(Name) %>%
+  summarise(across(c(W,L,G:BF), sum)) %>%
+  ungroup()
+
+pitching_2022_a <- pitching_2022 %>%
+  group_by(Name) %>%
+  summarise(across(c(Age), mean)) %>%
+  ungroup()
+
+
+pitching_2022_num['Allstar_pitcher'] <- if_else(pitching_2022_num$Name %in% allstars_pit2023,1,0)
+
+pitching_2022_num <- pitching_2022_num %>%
+  mutate(across(c(W,L,G:BF), ~ as.numeric(as.character(.))),
+         Age = pitching_2022_a$Age, Allstar_pitcher = factor(Allstar_pitcher, levels = c(1,0)))
+
+
+pitching_2022_num %>% 
+  filter(Allstar_pitcher == 1) %>% 
+  head() %>% 
+    gt() %>% 
+    tab_header(
+    title = "Pitching Statistics",
+    subtitle = "2022") %>% 
+    fmt_number(columns = everything())
+
+
+players_pitch <- pitching_2022_num %>% 
+  pull(Name)
+allstar_pitch <- pitching_2022_num %>% 
+  pull(Allstar_pitcher)
+
+
+pitching_2022_num <- pitching_2022_num %>% 
+  mutate(Allstar_pitcher = as.factor(Allstar_pitcher))
+
+# write.csv(pitching_2022_num, "/Users/kylebistrain/Documents/STAT551/baseballProject/2022 MLB Player Stats - Pitching_colab.csv", row.names=FALSE)
+
+cor_data_p <- pitching_2022_num %>% 
+  select(-Name,-Allstar_pitcher) 
+```
+
+```{r}
+#| error: false
+batting_2022_num <- batting_2022 %>%
+  group_by(Name) %>%
+  summarise(across(c(G:SO,TB:IBB), sum)) %>%
+  ungroup()
+
+batting_2022_m <- batting_2022 %>%
+  group_by(Name) %>%
+  summarise(across(c(Age), mean)) %>%
+  ungroup()
+
+batting_2022_num <- batting_2022_num %>%
+  mutate(across(c(G:SO,TB:IBB), ~ as.numeric(as.character(.))),
+         Age = batting_2022_m$Age)
+
+
+batting_2022_num['Allstar_batter'] <- if_else(batting_2022_num$Name %in% allstars_bat2023,1,0)
+
+batting_2022_num %>% 
+  filter(Allstar_batter == 1) %>% 
+  head() %>% 
+    gt() %>% 
+    tab_header(
+    title = "Batting Statistics",
+    subtitle = "2022") %>% 
+    fmt_number(columns = everything())
+
+
+players <- batting_2022_num %>% 
+  pull(Name)
+starters <- batting_2022_num %>% 
+  pull(Allstar_batter)
+
+
+batting_2022_num <- batting_2022_num %>% 
+  mutate(Allstar_batter = as.factor(Allstar_batter), Allstar_batter = factor(Allstar_batter, levels = c(1,0)))
+
+
+# write.csv(batting_2022_num, "/Users/kylebistrain/Documents/STAT551/baseballProject/2022 MLB Player Stats - Batting_colab.csv", row.names=FALSE)
+
+cor_data <- batting_2022_num %>% 
+  select(-Name,-Allstar_batter) 
+```
+
+## 3.1. Initial Exploratory Analysis
+
+In our initial exploratory data analysis, we focused on identifying outliers, missing values, and any necessary data cleaning steps.
+
+We didn't find any missing values or extreme outliers. However, we observed that sometimes the same player would appear multiple times in the dataset. This happens when a player transferred to another team during the season, which would make that player appear multiple times under different teams with different performance metrics. We aggregated players that transferred during the season by summing some metrics (e.g., games played, at-bats, hits) and averaging others.
+
+Furthermore, we had to modify the names by removing unnecessary white spaces before or after the name. Many of the names had accent marks which we decided to remove as R had difficulties deciphering them as well as to make the data entry process easier.
+
+**Note:** Kodai Senga made the All-Stars Team as a rookie in 2023, so we do not have his pitching data from the 2022 season. However, we do have 2022 pitching data for the other 33 All-Star pitchers.
+
+## 3.2. Correlation Plots
+
+```{r}
+#| layout-nrow: 1 
+
+#Batting
+corr_mat <- round(cor(cor_data),3)
+p_mat <- cor_pmat(cor_data)
+
+corr_mat_bat <- ggcorrplot(
+  corr_mat, hc.order = TRUE, type = "lower",
+  outline.color = "white",
+  p.mat = p_mat,
+  title = "Correlation Matrix for Batting Metrics 2022",
+  sig.level = .99
+)
+ 
+ggplotly(corr_mat_bat)
+    
+
+# Pitching
+corr_mat <- round(cor(cor_data_p),3)
+p_mat <- cor_pmat(cor_data_p)
+ 
+corr_mat <- ggcorrplot(
+  corr_mat, hc.order = TRUE, type = "lower",
+  outline.color = "white",
+  p.mat = p_mat,
+  title = "Correlation Matrix for Pitching Metrics 2022",
+  sig.level = .99
+)
+ 
+ggplotly(corr_mat)
+```
+
+After looking at the correlation plot, it is clear that almost all of the response variables are highly positively correlated with each other. This indicates that we should either exclude those variables or use methods such as PCA to reduce the dimensionality of the data.
+
+## 3.3. Imbalanced Dataset
+
+One of the most crucial, albeit not surprising, insights we gained from the exploratory data analysis is the extreme imbalance of both of our dataset with regards to the target variable.
+
+Firstly, let's have a look at the count of All-Stars (1) versus "Not All-Stars" (0) in the batting dataset:
+
+```{r}
+data.frame(table(batting_2022_num$Allstar_batter)) %>% 
+    rename(`Class Labels` = Var1, Frequency = Freq) %>% 
+    gt() %>% 
+    tab_header(
+    title = "Count of All-Star vs. Non-All-Star Batters") %>% 
+    fmt_number(everything(), decimals = 0) %>% 
+    cols_align(
+    align = "center",
+    columns = everything())
+```
+
+In total, there are 44 All-Stars and 745 Not All-Stars players.
+
+The same applies for the pitching dataset:
+
+```{r}
+data.frame(table(pitching_2022_num$Allstar_pitcher)) %>% 
+    rename(`Class Labels` = Var1, Frequency = Freq) %>% 
+    gt() %>% 
+    tab_header(
+    title = "Count of All-Star vs. Non-All-Star Pitchers") %>% 
+    fmt_number(everything(), decimals = 0) %>% 
+    cols_align(
+    align = "center",
+    columns = everything())
+```
+
+Here we have 33 All-star pitchers and 835 non-All-Star pitchers.
+
+The implications for our data analysis is that our models are almost always going to be skewed towards classifying observations as 0. This implies that performance metrics like accuracy won't tell us the whole story, since a model that predicts every observation to be 0 would still score highly on accuracy.
+
+The scope of this project is to train a model that is the most capable of predicting an All-Star when they actually are an All-Star. In statistical terms, this is called a "True Positive."
+
+Hence, going forward, we are going to be primarily concerned with measuring how well our classification models do based on recall and precision, since both of these metrics are measuring how well a model does in making "True Positive" predictions.
+
+As a reminder:
+
+-   Recall, frequently also termed sensitivity or true positive rate, measures the proportion of positive cases the model predicted correctly divided by all actual positive cases: $\frac{True\:Positve}{True\:Positve + False\:Negative}$.
+
+-   Precision measures the proportion of true positive predictions out of all positive predictions: $\frac{True\:Positve}{True\:Positve + False\:Positive}$.
+
+# 4. Regression-Based Methods
+
+To begin our analysis, we decided to start with regression-based models. However, given the size of our dataset, the amount of predictor variables as well as the (multi)collinearity issue mentioned above, we decided that it wouldn't make sense to run a multiple linear regression model without model specification.
+
+To specify our model, we decided to use backwards selection. Backwards selection has a few advantages over forwards or best subset selection. First of all, it is significantly more computationally efficient than best subset selection, which would iterate through all possible predictor variable combinations. Furthermore, it is more adept in dealing with multicollinearity than forwards selection is. By starting with the full model, backwards selection is able to identify non-essential variables (i.e., variables that are a linear combination of others) and remove them.
+
+However, it is important to note that we could achieve similar or better results using regularization techniques, such as lasso or ridge. But given the fact that this is primarily a classification task, we decided to focus our attention on models that are better at classifying than linear regression.
+
+## 4.1. Backwards Selection - Batting
+
+```{r}
+#| warning: false
+#| output: false
+bselec_batting_df <- batting_2022_num %>% 
+    select(-Name) %>% 
+    mutate(Allstar_batter = as.numeric(Allstar_batter))
+
+bselec_batting_df$Allstar_batter <- ifelse(bselec_batting_df$Allstar_batter == 2, 1, 0)
+
+bselec_batting <- regsubsets(Allstar_batter ~ .,
+                     data = bselec_batting_df,
+                     method = "backward",
+                     nvmax = 19)
+```
+
+```{r}
+bselec_batting_stats <- tibble(`# of Variables` = 1:19,
+    `Adj-R-Squared` = summary(bselec_batting)$adjr2,
+                      `CP` = summary(bselec_batting)$cp, 
+                      `BIC` = summary(bselec_batting)$bic
+                      ) %>%
+    gt() %>% 
+    tab_header(
+    title = "Backwards Selection - Batting") %>% 
+    fmt_number(columns = `# of Variables`, decimals = 0) %>% 
+    fmt_number(columns = c(`Adj-R-Squared`, CP, BIC)) %>% 
+    cols_align(
+    align = "center",
+    columns = everything()) %>% 
+    tab_spanner(
+    label = "Performance Metrics",
+    columns = everything()
+  )
+
+bselec_batting_stats
+```
+
+The backwards selection linear regression model with 8 variables has the best combination of high $adjusted \: R^2$, low CP, and low BIC.
+
+```{r}
+#| output: false
+summary(bselec_batting)
+```
+
+```{r}
+#| warning: false
+bselec_batting_cv <- vfold_cv(bselec_batting_df, v = 5)
+
+lr_mod <- linear_reg() %>% 
+    set_engine("lm") %>% 
+    set_mode("regression")
+
+lr_batting_recipe <- recipe(Allstar_batter ~ G + R + `2B`+ HR + RBI + CS + SO + IBB, data = bselec_batting_df) %>% 
+    step_normalize(all_predictors())
+
+lr_batting_wflow <- workflow() %>% 
+    add_recipe(lr_batting_recipe) %>% 
+    add_model(lr_mod)
+
+lr_batting_cv <- lr_batting_wflow %>% 
+    fit_resamples(
+        resamples = bselec_batting_cv,
+        metrics = metric_set(rmse, rsq)
+    )
+
+lr_batting_cv %>% 
+    collect_metrics() %>% 
+    gt() %>% 
+    tab_header(
+    title = "Backwards Selection - Batting") %>% 
+    fmt_number(columns = n, decimals = 0) %>%
+    fmt_number(columns = c(mean, std_err), decimals = 3) %>% 
+    cols_align(
+    align = "center",
+    columns = everything()) %>% 
+    tab_spanner(
+    label = "Cross Validation",
+    columns = everything()
+  )
+```
+
+### Interpretation
+
+An RMSE of 0.2 indicates that, on average, the predictions of our model were off by 0.2. This might not seem bad at first, but keep in mind that our target variable only ranges from 0 to 1. In addition to that, we have a heavily imbalanced dataset in which even if our model predicted 0 (Not an All-Star) for every observation, it would achieve a RMSE that would be considered low on first glance.
+
+## 4.2. Backwards Selection - Pitching
+
+```{r}
+#| warning: false
+bselec_pitching_df <- pitching_2022_num %>% 
+    select(-Name) %>% 
+    mutate(
+        Allstar_pitcher = as.numeric(Allstar_pitcher)
+    )
+
+bselec_pitching_df$Allstar_pitcher <- ifelse(bselec_pitching_df$Allstar_pitcher == 2, 1, 0)
+
+bselec_pitching <- regsubsets(Allstar_pitcher ~ .,
+                     data = bselec_pitching_df,
+                     method = "backward",
+                     nvmax = 19)
+
+bselec_pitching_stats <- tibble(`# of Variables` = 1:19,
+    `Adj-R-Squared` = summary(bselec_pitching)$adjr2,
+                      `CP` = summary(bselec_pitching)$cp, 
+                      `BIC` = summary(bselec_pitching)$bic
+                      ) %>%
+    gt() %>% 
+    tab_header(
+    title = "Backwards Selection - Pitching") %>% 
+    fmt_number(columns = `# of Variables`, decimals = 0) %>% 
+    fmt_number(columns = c(`Adj-R-Squared`, CP, BIC)) %>% 
+    cols_align(
+    align = "center",
+    columns = everything()) %>% 
+    tab_spanner(
+    label = "Performance Metrics",
+    columns = everything()
+  )
+
+bselec_pitching_stats
+```
+
+For the pitching dataset, the backwards selection model with 11 variables achieved the best combination of high $adjusted \: R^2$, low CP, and low BIC.
+
+```{r}
+#| output: false
+summary(bselec_pitching)
+```
+
+```{r}
+bselec_pitching_cv <- vfold_cv(bselec_pitching_df, v = 5)
+
+lr_pitching_recipe <- recipe(Allstar_pitcher ~ L + G + SV + IP + R + ER + HR + SO + HBP + BK + WP, data = bselec_pitching_df) %>% 
+    step_normalize(all_predictors())
+
+lr_pitching_wflow <- workflow() %>% 
+    add_recipe(lr_pitching_recipe) %>% 
+    add_model(lr_mod)
+
+lr_pitching_cv <- lr_pitching_wflow %>% 
+    fit_resamples(
+        resamples = bselec_pitching_cv
+    )
+
+lr_pitching_cv %>% 
+    collect_metrics() %>% 
+    gt() %>% 
+    tab_header(
+    title = "Backwards Selection - Pitching") %>% 
+    fmt_number(columns = n, decimals = 0) %>%
+    fmt_number(columns = c(mean, std_err), decimals = 3) %>% 
+    cols_align(
+    align = "center",
+    columns = everything()) %>% 
+    tab_spanner(
+    label = "Cross Validation",
+    columns = everything()
+  )
+```
+
+### Interpretation
+
+The backwards selection model with 11 variables achieved an RMSE of 0.1749 on the cross validated pitching dataset. Again, this might seem good at first, but when viewed in the context of the goal of this project and the dataset, it is fair to say that the backwards selection model is performing poorly.
+
+# 5. Principle Component Analysis
+
+As mentioned in section 3.2., we are dealing with a dataset with heavily (multi)collinear predictor variables. This makes perfect sense since a lot of performance metrics used in baseball are a linear combination of one or more other performance metrics. Principle Component Analysis (PCA) decorrelates these features by transforming them into a set of linearly uncorrelated variables (principal components).
+
+## 5.1. Principal Component Analysis - Batting
+
+```{r}
+#| error: false
+pc_bat <- prcomp(cor_data, 
+             center = TRUE, 
+             scale = TRUE)
+
+summary_table <- summary(pc_bat)
+
+summary_data <- data.frame(
+    PC = 1:20,
+  Standard_Deviation = summary_table$sdev,
+  Proportion = summary_table$sdev^2 / sum(summary_table$sdev^2),
+  Cumulative = cumsum(summary_table$sdev^2 / sum(summary_table$sdev^2))
+)
+
+summary_data %>%
+  gt() %>%
+  tab_header(
+    title = "PCA - Batting"
+  ) %>%
+  fmt_number(
+    columns = c(Standard_Deviation, Proportion, Cumulative),
+    decimals = 3
+  ) %>%
+  tab_spanner(
+    label = "Variance Explained",
+    columns = c(PC, Standard_Deviation, Proportion, Cumulative)
+  )
+```
+
+```{r}
+data.frame(Variables = colnames(batting_2022_num %>% select(-Name, -Allstar_batter)), pc_bat$rotation) %>% 
+  select(1:5) %>% 
+  arrange(desc(abs(PC1))) %>%
+  head() %>% 
+    gt() %>% 
+    tab_header(
+        title = "PCA - Batting"
+    ) %>% 
+    fmt_number(decimals = 3) %>% 
+    tab_spanner(
+    label = "Ranked Descendingly by PC1",
+    columns = c(Variables, PC1, PC2, PC3, PC4)
+  )
+
+
+data.frame(Variables = colnames(batting_2022_num %>% select(-Name, -Allstar_batter)), pc_bat$rotation) %>% 
+  select(1:5) %>% 
+  arrange(
+    desc(
+      abs(PC2)
+      )
+    ) %>%
+  head() %>% 
+    gt() %>% 
+    tab_header(
+        title = "PCA - Batting"
+    ) %>% 
+    fmt_number(decimals = 3) %>% 
+    tab_spanner(
+    label = "Ranked Descendingly by PC2",
+    columns = c(Variables, PC1, PC2, PC3, PC4)
+  )
+```
+
+### Interpretation
+
+Based on the first principle component, the top five most important variables for predicting whether a baseball batter is an All Star starter are plate appearances, total bases, at bats, hits, and runs for baseball batters. From the second principle component, the top five most important variables for predicting whether a baseball batter is an All Star starter are stolen bases, caught stealing, sacrifice hits, triples hit, and age for baseball batters. Age has a different sign than the other variable, which indicates that age has an opposite effect of the other variables in that principle component.
+
+## 5.2. Principal Component Analysis - Pitching
+
+```{r}
+pc_pit <- prcomp(cor_data_p, 
+             center = TRUE, 
+             scale = TRUE)
+
+summary_table <- summary(pc_pit)
+
+summary_data <- data.frame(
+    PC = 1:21,
+  Standard_Deviation = summary_table$sdev,
+  Proportion = summary_table$sdev^2 / sum(summary_table$sdev^2),
+  Cumulative = cumsum(summary_table$sdev^2 / sum(summary_table$sdev^2))
+)
+
+summary_data %>%
+  gt() %>%
+  tab_header(
+    title = "PCA - Pitching"
+  ) %>%
+  fmt_number(
+    columns = c(Standard_Deviation, Proportion, Cumulative),
+    decimals = 3
+  ) %>%
+  tab_spanner(
+    label = "Variance Explained",
+    columns = c(PC, Standard_Deviation, Proportion, Cumulative)
+  )
+```
+
+```{r}
+data.frame(Variables = colnames(pitching_2022_num %>% select(-Name, -Allstar_pitcher)), pc_pit$rotation) %>% 
+    select(1:5) %>% 
+  arrange(
+    desc(
+      abs(PC1)
+      )
+    ) %>%
+  head() %>% 
+    gt() %>% 
+    tab_header(
+        title = "PCA - Pitching"
+    ) %>% 
+    fmt_number(decimals = 3) %>% 
+    tab_spanner(
+    label = "Ranked Descendingly by PC1",
+    columns = c(Variables, PC1, PC2, PC3, PC4)
+  )
+
+data.frame(Variables = colnames(pitching_2022_num %>% select(-Name, -Allstar_pitcher)), pc_pit$rotation) %>% 
+  select(1:5) %>% 
+  arrange(
+    desc(
+      abs(PC2)
+      )
+    ) %>% 
+  head() %>% 
+    gt() %>% 
+    tab_header(
+        title = "PCA - Pitching"
+    ) %>% 
+    fmt_number(decimals = 3) %>% 
+    tab_spanner(
+    label = "Ranked Descendingly by PC2",
+    columns = c(Variables, PC1, PC2, PC3, PC4)
+  )
+```
+
+```{r}
+#| output: false
+pit_df <- pc_pit$x %>%
+  as.data.frame() %>%
+  bind_cols(allstar_pitch) %>%
+  rename(Allstar_pitcher = `...22`) %>% 
+  mutate(Allstar_pitcher = factor(Allstar_pitcher, levels = c(0, 1)))
+```
+
+```{r}
+#| output: false
+bat_df <- pc_bat$x %>%
+  as.data.frame() %>%
+  bind_cols(starters) %>%
+  rename(Allstar_batter = `...21`) %>% 
+  mutate(Allstar_batter = factor(Allstar_batter, levels = c(0, 1)))
+```
+
+### Interpretation
+
+Based on the first principle component, the top five most important variables for predicting whether a baseball pitcher makes the All Star team is batters faced, innings pitched, hits allowed, runs, and earned runs allowed for baseball pitchers. The signs are all positive for these variables. The difference between a run and an earned run is that an run can occur from an error made by the defense. An earned run means that the defense did not make an error and it was purely from offensive production. For the second principle component, the five most important variables are games finished, saves, games played, intentional bases on balls, and games started. Note that games started has an opposite effect of the other variables in principle component two.
+
+## 5.3. Logistic Regression
+
+```{r}
+#| message: false
+logit_mod <- logistic_reg() %>%
+  set_mode("classification") %>%
+  set_engine("glm")
+
+cc_recipe <- recipe(Allstar_batter ~ PA, data = batting_2022_num) %>% 
+  step_normalize(all_numeric_predictors())
+
+log_wflow <- workflow() %>%
+  add_recipe(cc_recipe) %>%
+  add_model(logit_mod)
+
+ins_cv2 <- vfold_cv(batting_2022_num, v = 10, strata = Allstar_batter)
+
+
+ins_fit <- log_wflow %>%
+  fit_resamples(ins_cv2, metrics = metric_set(precision, recall, accuracy, roc_auc, specificity))
+
+
+ins_fit %>% 
+    collect_metrics() %>% 
+    gt() %>% 
+    tab_header(
+    title = "Logistic Regression - Batting",
+    subtitle = "Using Only Plate Appearences") %>% 
+    fmt_number(columns = c(mean, std_err), decimals = 3) %>%
+    fmt_number(columns = n, decimals = 0) %>% 
+    cols_align(
+    align = "center",
+    columns = everything()) %>% 
+    tab_spanner(
+    label = "Cross Validation",
+    columns = everything()
+  )
+```
+
+### Interpretation
+
+Out of curiosity, we decided to fit a model just with plate appearances using logistic regression because it was the most important variable based of PC1 weighting. It achieved an accuracy rate of 93.79%, an roc_auc of 0.79, and specificity of 99.2%.
+
+Initially, that might seem impressive; however, as mentioned in section 3.3., we are primarily interested in performance metrics that measure how well the model does in predicting positive cases (i.e., All-Stars) such as recall and precision.
+
+On the cross validated batting dataset, the logistic regression model achieved a precision of 20% and recall of 4.2%. It is hard to say at this point whether this is good or not given the imbalance of our dataset.
+
+# 6. K-Nearest Neighbor
+
+K-Nearest Neighbors (KNN) is a machine learning algorithm used for classification and regression tasks. It operates by measuring the distances between data points, making predictions based on the class labels of the k-nearest neighbors. We chose KNN for predicting All-Star players due to its flexibility, simplicity, and ability to handle imbalanced datasets. It doesn't assume specific data distributions and is sensitive to local patterns, making it suitable for tasks where players with similar characteristics may share similar outcomes. However, the choice of the parameter k should be carefully selected through hyperparameter tuning.
+
+## 6.1. K-Nearest Neighbor - Batting
+
+```{r}
+#| warning: false
+knn_mod_tune <- nearest_neighbor(neighbors = tune()) %>%
+  set_engine("kknn") %>%
+  set_mode("classification")
+
+k_grid <- grid_regular(neighbors(c(1,50)), 
+                       levels = 25)
+
+cc_rec <- recipe(Allstar_batter ~ .,data = bat_df) 
+
+cc_wflow <- workflow() %>%
+  add_recipe(cc_rec) %>%
+  add_model(knn_mod_tune)
+
+cc_train_cfold <- vfold_cv(bat_df, v = 5, strata = Allstar_batter)
+
+knn_grid_search <-
+  tune_grid(
+    cc_wflow,
+    resamples = cc_train_cfold,
+    grid = k_grid,
+    metrics = metric_set(precision, recall, roc_auc, accuracy, specificity)
+  )
+
+bat_results <- knn_grid_search %>% collect_metrics()
+
+bat_results %>%
+  filter(.metric == 'roc_auc') %>%
+  ggplot( mapping = aes(x = neighbors, y = mean) ) +
+  geom_line() +
+  labs(
+    title = "ROC_AUC Across Neighbors",
+    x = "Neighbors",
+    y = "ROC_AUC"
+  )
+
+bat_results %>%
+  filter(.metric == 'specificity') %>%
+  ggplot( mapping = aes(x = neighbors, y = mean) ) +
+  geom_line() +
+  labs(
+    title = "Specificity Across Neighbors",
+    x = "Neighbors",
+    y = "Specificity Rate"
+  )
+bat_results %>%
+  filter(.metric == 'precision') %>%
+  ggplot( mapping = aes(x = neighbors, y = mean) ) +
+  geom_line() +
+  labs(
+    title = "Precision Across Neighbors",
+    x = "Neighbors",
+    y = "Precision"
+  )
+bat_results %>%
+  filter(.metric == 'recall') %>%
+  ggplot( mapping = aes(x = neighbors, y = mean) ) +
+  geom_line() +
+  labs(
+    title = "Recall Across Neighbors",
+    x = "Neighbors",
+    y = "Recall"
+  )
+```
+
+### Interpretation
+
+We cross-validated the KNN-model on the principal component dataset we created in the prior section to determine the optimal amount of neighbors.
+
+The cross validated model achieved its highest specificity rate of 11.22% at 1 and 3 neighbors. This means, that out of all 44 All-Star batters, the model was able to predict 11.22% of them correctly. This makes intuitively sense, since the fewer neighbors the model takes into account, the more likely the majority of them are going to be All-Stars.
+
+### Confusion Matrix
+
+```{r}
+knn_mod <- nearest_neighbor(neighbors = 3) %>%
+  set_engine("kknn") %>%
+  set_mode("classification")
+
+cc_rec <- recipe(Allstar_batter ~ ., data = batting_2022_num) %>% 
+    update_role(Name, new_role = "id") %>% 
+    step_normalize(all_predictors())
+
+knn_bat_wflow <- workflow() %>% 
+    add_recipe(cc_rec) %>% 
+    add_model(knn_mod)
+
+knn_bat_fit <- knn_bat_wflow %>% 
+    fit(batting_2022_num)
+
+batting_2022_num %>% 
+    mutate(knn_pred = predict(knn_bat_fit, new_data = batting_2022_num)$.pred_class) %>% 
+    conf_mat(truth = Allstar_batter, estimate = knn_pred)
+
+bat_knn_spec <- batting_2022_num %>% 
+    mutate(knn_pred = predict(knn_bat_fit, new_data = batting_2022_num)$.pred_class) %>% 
+    specificity(truth = Allstar_batter, estimate = knn_pred)
+
+bat_knn_prec <-batting_2022_num %>% 
+    mutate(knn_pred = predict(knn_bat_fit, new_data = batting_2022_num)$.pred_class) %>% 
+    precision(truth = Allstar_batter, estimate = knn_pred)
+
+bat_knn_recall <-batting_2022_num %>% 
+    mutate(knn_pred = predict(knn_bat_fit, new_data = batting_2022_num)$.pred_class) %>% 
+    recall(truth = Allstar_batter, estimate = knn_pred)
+
+bat_knn_specificity <-batting_2022_num %>% 
+    mutate(knn_pred = predict(knn_bat_fit, new_data = batting_2022_num)$.pred_class) %>% 
+    specificity(truth = Allstar_batter, estimate = knn_pred)
+```
+
+**Note:** Unfortunately, we weren't able to convert confusion matrices (`conf_mat` objects) into dataframes and therefore `gt` tables.
+
+After fitting the KNN model on the batting data without PCA with 3 neighbors, it was able to predict all 44 out of 44 All-Star batters correctly. The reported recall, precision, and accuracy are all 100%, which is quite impressive. However, we are suspicious of this result given the huge imbalance in the dataset.
+
+## 6.2. K-Nearest Neighbor - Pitchers
+
+```{r}
+#| warning: false
+knn_mod_tune <- nearest_neighbor(neighbors = tune()) %>%
+  set_engine("kknn") %>%
+  set_mode("classification")
+
+k_grid <- grid_regular(neighbors(c(1,50)), 
+                       levels = 25)
+
+cc_rec <- recipe(Allstar_pitcher ~ . ,data = pit_df) 
+
+cc_wflow <- workflow() %>%
+  add_recipe(cc_rec) %>%
+  add_model(knn_mod_tune)
+
+cc_train_cfold <- vfold_cv(pit_df, v = 5, strata = Allstar_pitcher)
+
+knn_grid_search <-
+  tune_grid(
+    cc_wflow,
+    resamples = cc_train_cfold,
+    grid = k_grid,
+    metrics = metric_set(precision, recall, roc_auc, accuracy, specificity)
+  )
+
+pitch_results <- knn_grid_search %>% collect_metrics()
+
+pitch_results %>%
+  filter(.metric == 'precision') %>%
+  ggplot(mapping = aes(x = neighbors, y = mean) ) +
+  geom_line() +
+  labs(
+    title = "Precision versus Neighbors",
+    x = "Neighbors",
+    y = "Precision Rate"
+  )
+pitch_results %>%
+  filter(.metric == 'specificity') %>%
+  ggplot( mapping = aes(x = neighbors, y = mean) ) +
+  geom_line() +
+  labs(
+    title = "Specificity Across Neighbors",
+    x = "Neighbors",
+    y = "Specificity Rate"
+  )
+pitch_results %>%
+  filter(.metric == 'recall') %>%
+  ggplot( mapping = aes(x = neighbors, y = mean) ) +
+  geom_line() +
+  labs(
+    title = "Recall versus Neighbors",
+    x = "Neighbors",
+    y = "Recall Rate"
+  )
+
+pitch_results %>%
+  filter(.metric == 'roc_auc') %>%
+  ggplot( mapping = aes(x = neighbors, y = mean) ) +
+  geom_line() +
+  labs(
+    title = "ROC_AUC versus Neighbors",
+    x = "Neighbors",
+    y = "ROC_AUC"
+  )
+```
+
+### Interpretation
+
+Similarly to in the section above we cross-validated the KNN model on the principal component pitching dataset. This KNN models achieved its highest recall rate at 1 and 3 neighbors with 29.94%. This indicates that out of all 33 All-Star pitchers, the model was able to 29.94% out of them correctly.
+
+### Confusion Matrix
+
+```{r}
+knn_mod <- nearest_neighbor(neighbors = 3) %>%
+  set_engine("kknn") %>%
+  set_mode("classification")
+
+cc_rec <- recipe(Allstar_pitcher ~ .,data = pitching_2022_num) %>% 
+    update_role(Name, new_role = "id") %>% 
+    step_normalize(all_predictors())
+
+knn_pitch_wflow <- workflow() %>% 
+    add_recipe(cc_rec) %>% 
+    add_model(knn_mod)
+
+knn_pit_fit <- knn_pitch_wflow %>% 
+    fit(pitching_2022_num)
+
+pitching_2022_num %>% 
+    mutate(knn_pred = predict(knn_pit_fit, new_data = pitching_2022_num)$.pred_class) %>% 
+    conf_mat(truth = Allstar_pitcher, estimate = knn_pred)
+
+pit_knn_spec <- pitching_2022_num %>% 
+    mutate(knn_pred = predict(knn_pit_fit, new_data = pitching_2022_num)$.pred_class) %>% 
+    specificity(truth = Allstar_pitcher, estimate = knn_pred)
+
+pit_knn_prec <-pitching_2022_num %>% 
+    mutate(knn_pred = predict(knn_pit_fit, new_data = pitching_2022_num)$.pred_class) %>% 
+    precision(truth = Allstar_pitcher, estimate = knn_pred)
+
+pit_knn_recall <-pitching_2022_num %>% 
+    mutate(knn_pred = predict(knn_pit_fit, new_data = pitching_2022_num)$.pred_class) %>% 
+    recall(truth = Allstar_pitcher, estimate = knn_pred)
+
+pit_knn_accuracy <-pitching_2022_num %>% 
+    mutate(knn_pred = predict(knn_pit_fit, new_data = pitching_2022_num)$.pred_class) %>% 
+    accuracy(truth = Allstar_pitcher, estimate = knn_pred)
+
+```
+
+After fitting the KNN model on the batting data without PCA with 9 neighbors it was able to predict 10 out of 33 All-Star batters correctly. The reported recall is 0.3030, precision is 1, and accuracy is 0.9735, which is higher than the null classifier model.
+
+# 7. Decision Tree
+
+A decision tree is a graphical model that recursively splits the data based on features, creating a tree-like structure of decisions leading to predictions. In the context of baseball, decision trees can identify player attributes that significantly contribute to All-Star status prediction. Decision trees are particularly useful for their interpretability, providing clear insights into the decision-making process. However, they may be prone to overfitting, and their performance can be enhanced by techniques like pruning or using ensemble methods like Random Forest. Despite potential limitations, decision trees offer a straightforward and intuitive approach for predicting All-Star players based on key features in the dataset.
+
+## 7.1. Decision Tree - Batting
+
+```{r}
+#| warning: false
+tree_grid <- grid_regular(cost_complexity(),
+                          tree_depth(),
+                          min_n(),
+                          levels = 5)
+
+batting_cv <- vfold_cv(batting_2022_num, v = 5)
+
+tree_tune_mod <- decision_tree(cost_complexity = tune(),
+                               tree_depth = tune(),
+                               min_n = tune()) %>% 
+    set_engine("rpart") %>% 
+    set_mode("classification")
+
+full_recipe_batting <- recipe(Allstar_batter ~ ., data = batting_2022_num) %>% 
+    update_role(Name, new_role = "id") %>% 
+    step_normalize(all_predictors())
+
+tree_tune_batting_wflow <- workflow() %>% 
+    add_model(tree_tune_mod) %>% 
+    add_recipe(full_recipe_batting)
+
+tree_tune_batting_cv <- tree_tune_batting_wflow %>% 
+    tune_grid(
+        grid = tree_grid,
+        resamples = batting_cv,
+        metrics = metric_set(precision, recall, roc_auc, specificity, accuracy)
+    )
+
+tree_tune_batting_results <- tree_tune_batting_cv %>% 
+    collect_metrics()
+
+tree_tune_batting_results %>%
+    filter(.metric == "recall") %>% 
+    ggplot(aes(x = cost_complexity, y = mean)) +
+    geom_line() +
+    labs(
+        title = "Recall Across Cost Complexity",
+        x = "Cost Complexity",
+        y = "Recall"
+    )
+
+tree_tune_batting_results %>%
+    filter(.metric == "recall") %>% 
+    ggplot(aes(x = tree_depth, y = mean)) +
+    geom_line() +
+    labs(
+        title = "Recall Across Tree Depth",
+        x = "Tree Depth",
+        y = "Recall"
+    )
+
+tree_tune_batting_results %>%
+    filter(.metric == "recall") %>% 
+    ggplot(aes(x = min_n, y = mean)) +
+    geom_line() +
+    labs(
+        title = "Recall Across min_n",
+        x = "min_n",
+        y = "Recall"
+    )
+```
+
+```{r}
+tree_tune_batting_results %>% 
+    filter(.metric == "precision") %>% 
+    slice_max(mean) %>% 
+    gt() %>% 
+    tab_header(
+    title = "Decision Tree - Batting") %>% 
+    fmt_number(columns = c(mean, std_err), decimals = 3) %>%
+    fmt_number(columns = c(n, min_n, tree_depth), decimals = 0) %>% 
+    fmt_number(columns = cost_complexity, decimals = 10) %>% 
+    cols_align(
+    align = "center",
+    columns = everything()) %>% 
+    tab_spanner(
+    label = "Cross Validation",
+    columns = everything()
+  )
+```
+
+### Interpretation
+
+Using the plots and the table from above, we decided on choosing a hyperparameter combination that maximizes recall as well as precision. In this case, the combination is the following: `cost_complexity = 0.0005623413`, `tree_depth = 4`, and `min_n = 2`. This hyperparameter combination achieved a recall rate of 33.2%, i.e., it was able to correctly predict 33.2% out of all All-Star batters, and a precision rate of 49.4%, which indicates that out of all positive predicitions, 49.4% were made correctly.
+
+### Confusion Matrix
+
+```{r}
+tree_mod <- decision_tree(cost_complexity = 5.623413e-04,
+                               tree_depth = 4,
+                               min_n = 2) %>% 
+    set_engine("rpart") %>% 
+    set_mode("classification")
+
+tree_bat_wflow <- workflow() %>% 
+    add_recipe(full_recipe_batting) %>% 
+    add_model(tree_mod)
+
+tree_bat_fit <- tree_bat_wflow %>% 
+    fit(batting_2022_num)
+
+batting_2022_num %>% 
+    mutate(tree_pred = predict(tree_bat_fit, new_data = batting_2022_num)$.pred_class) %>%   
+    conf_mat(truth = Allstar_batter, estimate = tree_pred)
+
+
+final_bat_acc <- batting_2022_num %>% 
+    mutate(tree_pred = predict(tree_bat_fit, new_data = batting_2022_num)$.pred_class) %>%   
+    accuracy(truth = Allstar_batter, estimate = tree_pred)
+
+final_bat_prec <- batting_2022_num %>% 
+    mutate(tree_pred = predict(tree_bat_fit, new_data = batting_2022_num)$.pred_class) %>%   
+    precision(truth = Allstar_batter, estimate = tree_pred)
+
+final_bat_recall <- batting_2022_num %>% 
+    mutate(tree_pred = predict(tree_bat_fit, new_data = batting_2022_num)$.pred_class) %>%   
+    recall(truth = Allstar_batter, estimate = tree_pred)
+
+final_bat_sens <- batting_2022_num %>% 
+    mutate(tree_pred = predict(tree_bat_fit, new_data = batting_2022_num)$.pred_class) %>%   
+    sensitivity(truth = Allstar_batter, estimate = tree_pred)
+
+final_bat_spec <- batting_2022_num %>% 
+    mutate(tree_pred = predict(tree_bat_fit, new_data = batting_2022_num)$.pred_class) %>%   
+    specificity(truth = Allstar_batter, estimate = tree_pred)
+
+
+```
+
+Out of all 44 All-Star batters, the decision tree model was able to predict 30 correctly. The resulting metrics are reported in the conclusion.
+
+### Visualization
+
+```{r}
+rpart.plot(extract_fit_parsnip(tree_bat_fit)$fit, roundint = FALSE)
+```
+
+## 7.2. Decision Tree - Pitching
+
+```{r}
+#| warning: false
+pitching_cv <- vfold_cv(pitching_2022_num, v = 5)
+
+full_recipe_pitching <- recipe(Allstar_pitcher ~ ., data = pitching_2022_num) %>% 
+    update_role(Name, new_role = "id") %>% 
+    step_normalize(all_predictors())
+
+tree_tune_pitching_wflow <- workflow() %>% 
+    add_model(tree_tune_mod) %>% 
+    add_recipe(full_recipe_pitching)
+
+tree_pitching_cv <- tree_tune_pitching_wflow %>% 
+    tune_grid(grid = tree_grid,
+        resamples = pitching_cv,
+        metrics = metric_set(precision, recall, accuracy, roc_auc, specificity)
+    )
+
+tree_tune_pitching_results <- tree_pitching_cv %>% 
+    collect_metrics()
+
+tree_tune_pitching_results %>%
+    filter(.metric == "recall") %>% 
+    ggplot(aes(x = cost_complexity, y = mean)) +
+    geom_line() +
+    labs(
+        title = "Recall Across Cost Complexity",
+        x = "Cost Complexity",
+        y = "Recall"
+    )
+
+tree_tune_pitching_results %>%
+    filter(.metric == "recall") %>% 
+    ggplot(aes(x = tree_depth, y = mean)) +
+    geom_line() +
+    labs(
+        title = "Recall Across Tree Depth",
+        x = "Tree Depth",
+        y = "Recall"
+    )
+
+tree_tune_pitching_results %>%
+    filter(.metric == "recall") %>% 
+    ggplot(aes(x = min_n, y = mean)) +
+    geom_line() +
+    labs(
+        title = "Recall Across min_n",
+        x = "min_n",
+        y = "Recall"
+    )
+```
+
+```{r}
+tree_tune_pitching_results %>% 
+    filter(.metric == "recall") %>% 
+    slice_max(mean) %>% 
+    gt() %>% 
+    tab_header(
+    title = "Decision Tree - Pitching",
+    subtitle = "Hyperparameter Combination With Highest Recall") %>% 
+    fmt_number(columns = c(mean, std_err), decimals = 3) %>%
+    fmt_number(columns = c(n, min_n, tree_depth), decimals = 0) %>% 
+    fmt_number(columns = cost_complexity, decimals = 10) %>% 
+    cols_align(
+    align = "center",
+    columns = everything()) %>% 
+    tab_spanner(
+    label = "Cross Validation",
+    columns = everything()
+  )
+```
+
+### Interpretation
+
+As one can observe from the table above, there are in total 12 hyperparameter combinations that maximize recall at 27.4%. Unfortunately, this time, there is no combination that maximizes recall as well as precision. For that reason we will arbitrarily choose a hyperparameter combination that maximizes recall to fit on the dataset. We decided to go with: `cost_complexity = 0.0000031623`, `tree_depth = 8`, and `min_n = 2`.
+
+### Confusion Matrix
+
+```{r}
+tree_mod <- decision_tree(cost_complexity = 3.162278e-06,
+                               tree_depth = 8,
+                               min_n = 2) %>% 
+    set_engine("rpart") %>% 
+    set_mode("classification")
+
+tree_pit_wflow <- workflow() %>% 
+    add_recipe(full_recipe_pitching) %>% 
+    add_model(tree_mod)
+
+tree_pit_fit <- tree_pit_wflow %>% 
+    fit(pitching_2022_num)
+
+pitching_2022_num %>% 
+    mutate(tree_pred = predict(tree_pit_fit, new_data = pitching_2022_num)$.pred_class) %>% 
+    conf_mat(truth = Allstar_pitcher, estimate = tree_pred)
+
+final_pit_acc <- pitching_2022_num %>% 
+    mutate(tree_pred = predict(tree_pit_fit, new_data = pitching_2022_num)$.pred_class) %>% 
+    accuracy(truth = Allstar_pitcher, estimate = tree_pred)
+
+final_pit_prec <- pitching_2022_num %>% 
+    mutate(tree_pred = predict(tree_pit_fit, new_data = pitching_2022_num)$.pred_class) %>% 
+    precision(truth = Allstar_pitcher, estimate = tree_pred)
+
+final_pit_recall <- pitching_2022_num %>% 
+    mutate(tree_pred = predict(tree_pit_fit, new_data = pitching_2022_num)$.pred_class) %>% 
+    recall(truth = Allstar_pitcher, estimate = tree_pred)
+
+final_pit_specificity <- pitching_2022_num %>% 
+    mutate(tree_pred = predict(tree_pit_fit, new_data = pitching_2022_num)$.pred_class) %>% 
+    specificity(truth = Allstar_pitcher, estimate = tree_pred)
+
+final_pit_sensitivity <- pitching_2022_num %>% 
+    mutate(tree_pred = predict(tree_pit_fit, new_data = pitching_2022_num)$.pred_class) %>% 
+    sensitivity(truth = Allstar_pitcher, estimate = tree_pred)
+
+
+```
+
+Out of all 33 All-Star pitchers, the decision tree model was able to predict 27 correctly. The resulting metrics are reported in the conclusion.
+
+### Visualization
+
+```{r}
+rpart.plot(extract_fit_parsnip(tree_pit_fit)$fit, roundint = FALSE)
+```
+
+# 8. Random Forest
+
+Random Forest, a tree-based ensemble learning method, is well-suited for predicting whether a baseball player will become an All-Star in the next season. Random Forest builds multiple decision trees, each trained on a different subset of the data and using a random subset of features. This ensemble approach mitigates overfitting and improves predictive accuracy. For All-Star prediction, each decision tree independently assesses player attributes and contributes to a collective decision through a majority vote. Random Forest excels in handling imbalanced datasets, making it effective for tasks where positive outcomes, such as All-Star status, are less common.
+
+## 8.1. Random Forest - Batting
+
+```{r}
+#| warning: false
+rf_grid <- grid_regular(mtry(c(1, 10)),
+                        levels = 10)
+
+rf_tune_mod <- rand_forest(mtry = tune()) %>% 
+    set_engine("ranger") %>% 
+    set_mode("classification")
+
+rf_batting_tune_wflow <- workflow() %>% 
+    add_model(rf_tune_mod) %>% 
+    add_recipe(full_recipe_batting)
+
+rf_batting_tune <- tune_grid(
+    rf_batting_tune_wflow,
+    grid = rf_grid,
+    resamples = batting_cv,
+    metrics = metric_set(precision, recall, roc_auc)
+)
+
+rf_tune_batting_results <- rf_batting_tune %>% 
+    collect_metrics()
+
+rf_tune_batting_results %>%
+    filter(.metric == "recall") %>% 
+    ggplot(aes(x = mtry, y = mean)) +
+    geom_line() +
+    labs(
+        title = "Recall Across mtry",
+        x = "mtry",
+        y = "Recall"
+    )
+
+rf_tune_batting_results %>%
+    filter(.metric == "precision") %>% 
+    ggplot(aes(x = mtry, y = mean)) +
+    geom_line() +
+    labs(
+        title = "Precision Across mtry",
+        x = "mtry",
+        y = "Precision"
+    )
+
+rf_tune_batting_results %>%
+    filter(.metric == "roc_auc") %>% 
+    ggplot(aes(x = mtry, y = mean)) +
+    geom_line() +
+    labs(
+        title = "ROC_AUC Across mtry",
+        x = "mtry",
+        y = "ROC_AUC"
+    )
+```
+
+### Interpretation
+
+On the cross-validated batting dataset, the random forest with `mtry = 4` achieved the highest combination of recall (7.7%) and precision (66.67%). This indicates that the model was able to predict 7.7% out of all All-Star batters correctly and that out of all positive predictions 66.67% were made correctly.
+
+### Confusion Matrix
+
+```{r}
+rf_mod <- rand_forest(mtry = 4) %>% 
+    set_engine("ranger") %>% 
+    set_mode("classification")
+
+rf_bat_wflow <- workflow() %>% 
+    add_recipe(full_recipe_batting) %>% 
+    add_model(rf_mod)
+
+rf_bat_fit <- rf_bat_wflow %>% 
+    fit(batting_2022_num)
+
+batting_2022_num %>% 
+    mutate(rf_pred = predict(rf_bat_fit, new_data = batting_2022_num)$.pred_class) %>% 
+    conf_mat(truth = Allstar_batter, estimate = rf_pred)
+```
+
+Out of all 44 All-Star batters, the random forest model with `mtry = 4` was able to predict 28 correctly. In addition to that, the model didn't make any false negative predictions.
+
+## 8.2. Random Forest - Pitching
+
+```{r}
+#| warning: false
+rf_pitching_tune_wflow <- workflow() %>% 
+    add_model(rf_tune_mod) %>% 
+    add_recipe(full_recipe_pitching)
+
+rf_pitching_tune <- tune_grid(
+    rf_pitching_tune_wflow,
+    grid = rf_grid,
+    resamples = pitching_cv,
+    metrics = metric_set(precision, recall, accuracy, roc_auc, specificity,sensitivity)
+)
+
+rf_tune_pitching_results <- rf_pitching_tune %>% 
+    collect_metrics()
+
+rf_tune_pitching_results %>%
+    filter(.metric == "recall") %>% 
+    ggplot(aes(x = mtry, y = mean)) +
+    geom_line() +
+    labs(
+        title = "Recall Across mtry",
+        x = "mtry",
+        y = "Recall"
+    )
+
+rf_tune_pitching_results %>%
+    filter(.metric == "precision") %>% 
+    ggplot(aes(x = mtry, y = mean)) +
+    geom_line() +
+    labs(
+        title = "Precision Across mtry",
+        x = "mtry",
+        y = "Precision"
+    )
+
+rf_tune_pitching_results %>%
+    filter(.metric == "roc_auc") %>% 
+    ggplot(aes(x = mtry, y = mean)) +
+    geom_line() +
+    labs(
+        title = "ROC_AUC Across mtry",
+        x = "mtry",
+        y = "ROC_AUC"
+    )
+```
+
+### Interpretation
+
+Again, we were looking for the hyperparameter combination that maximizes recall as well as precision. At `mtry = 5, 6, 8` the random forest model was able to achieve a recall rate of 2.2% and a precision rate of 50% on the cross-validated pitching dataset. For our fitting purposes, we will be using `mtry = 8`.
+
+### Confusion Matrix
+
+```{r}
+rf_mod <- rand_forest(mtry = 8) %>% 
+    set_engine("ranger") %>% 
+    set_mode("classification")
+
+rf_pit_wflow <- workflow() %>% 
+    add_recipe(full_recipe_pitching) %>% 
+    add_model(rf_mod)
+
+rf_pit_fit <- rf_pit_wflow %>% 
+    fit(pitching_2022_num)
+
+pitching_2022_num %>% 
+    mutate(rf_pred = predict(rf_pit_fit, new_data = pitching_2022_num)$.pred_class) %>% 
+    conf_mat(truth = Allstar_pitcher, estimate = rf_pred)
+```
+
+Out of all 33 All-Star pitchers, the model was able to predict 23 correctly.
+
+# 9. Support Vector Machine
+
+Support Vector Machines (SVMs) are a classification algorithm that aims to find the optimal hyperplane to separate different classes in the feature space. In the context of baseball, SVMs can identify the hyperplane that best distinguishes All-Star players from non-All-Star players based on their attributes. SVMs are effective in high-dimensional spaces and are particularly useful when the relationship between features and classes is complex. Their ability to handle non-linear relationships can be advantageous in capturing intricate patterns in the data. However, SVMs may require careful tuning of parameters, such as the choice of kernel function and regularization parameters, to achieve optimal performance. SVMs offer a versatile and robust approach for predicting All-Star players, especially in scenarios with complex feature interactions and a need for accurate classification.
+
+## 9.1. Support Vector Machine - Batting
+
+```{r}
+bat_allstar <- bat_df %>%
+  pull(Allstar_batter)
+
+cost_grid <- grid_regular(cost(), levels = 20)
+
+svm_spec <- svm_linear(cost = tune(), margin = 0.5) %>%
+  set_mode("classification") %>%
+  set_engine("kernlab")
+
+bat_rec <- recipe(Allstar_batter ~ ., data = bat_df)
+
+an_wflow <- workflow() %>%
+  add_model(svm_spec) %>%
+  add_recipe(bat_rec)
+
+bat_cv <- vfold_cv(bat_df, v = 5,strata = Allstar_batter)
+
+
+svm_tune <- tune_grid(
+  an_wflow, 
+  grid = cost_grid,
+  resamples = bat_cv,
+  metrics = metric_set(precision, recall, accuracy, roc_auc, specificity,sensitivity)
+
+)
+
+svm_tune_batting_results <- svm_tune %>%
+  collect_metrics()
+
+
+svm_tune_batting_results %>%
+    filter(.metric == "recall") %>% 
+    ggplot(aes(x = cost, y = mean)) +
+    geom_line() +
+    labs(
+        title = "Recall Across Cost",
+        x = "Cost",
+        y = "Recall"
+    )
+
+svm_tune_batting_results %>%
+    filter(.metric == "precision") %>% 
+    ggplot(aes(x = cost, y = mean)) +
+    geom_line() +
+    labs(
+        title = "Precision Across Cost",
+        x = "Cost",
+        y = "Precision"
+    )
+
+svm_tune_batting_results %>%
+    filter(.metric == "roc_auc") %>% 
+    ggplot(aes(x = cost, y = mean)) +
+    geom_line() +
+    labs(
+        title = "ROC_AUC Across Cost",
+        x = "Cost",
+        y = "ROC_AUC"
+    )
+
+svm_tune_batting_results %>%
+    filter(.metric == "accuracy") %>% 
+    ggplot(aes(x = cost, y = mean)) +
+    geom_line() +
+    labs(
+        title = "Accuracy Across Cost",
+        x = "Cost",
+        y = "Accuracy"
+    )
+```
+
+```{r}
+#| output: false
+svm_mod <- svm_linear(cost = 3.2 , margin = 0.5) %>%
+  set_mode("classification") %>%
+  set_engine("kernlab")
+
+svm_work <- workflow() %>%
+  add_model(svm_mod) %>%
+  add_recipe(bat_rec)
+
+svm_fit <- svm_work %>% 
+  fit(bat_df)
+```
+
+```{r}
+bat_df %>% 
+    mutate(
+        svm_pred = predict(svm_fit, new_data = bat_df)$.pred_class
+    ) %>% 
+    conf_mat(truth = Allstar_batter, 
+           estimate = svm_pred)
+
+svm_prec <- bat_df %>% 
+    mutate(
+        svm_pred = predict(svm_fit, new_data = bat_df)$.pred_class
+    ) %>% 
+  precision(truth = Allstar_batter, 
+           estimate = svm_pred)
+svm_recall <- bat_df %>% 
+    mutate(
+        svm_pred = predict(svm_fit, new_data = bat_df)$.pred_class
+    ) %>% 
+  recall(truth = Allstar_batter, 
+           estimate = svm_pred)
+svm_acc <- bat_df %>% 
+    mutate(
+        svm_pred = predict(svm_fit, new_data = bat_df)$.pred_class
+    ) %>% 
+  accuracy(truth = Allstar_batter, 
+           estimate = svm_pred)
+```
+
+## 9.2. Support Vector Machine Linear Kernal for Pitchers
+
+```{r}
+#| warning: false
+cost_grid <- grid_regular(cost(), levels = 20)
+
+svm_spec <- svm_linear(cost = tune(), margin = 0.5) %>%
+  set_mode("classification") %>%
+  set_engine("kernlab")
+
+pit_recipe <- recipe(Allstar_pitcher ~ ., data = pit_df)
+
+an_wflow <- workflow() %>%
+  add_model(svm_spec) %>%
+  add_recipe(pit_recipe)
+
+pit_cv <- vfold_cv(pit_df, v = 5,strata = Allstar_pitcher)
+
+
+svm_tune <- tune_grid(
+  an_wflow, 
+  grid = cost_grid,
+  resamples = pit_cv,
+  metrics = metric_set(precision, recall, accuracy, roc_auc, specificity,sensitivity)
+
+)
+
+svm_tune_pitching_results <- svm_tune %>%
+  collect_metrics()
+
+
+svm_tune_pitching_results %>%
+    filter(.metric == "recall") %>% 
+    ggplot(aes(x = cost, y = mean)) +
+    geom_line() +
+    labs(
+        title = "Recall Across Cost",
+        x = "Cost",
+        y = "Recall"
+    )
+
+svm_tune_pitching_results %>%
+    filter(.metric == "precision") %>% 
+    ggplot(aes(x = cost, y = mean)) +
+    geom_line() +
+    labs(
+        title = "Precision Across Cost",
+        x = "Cost",
+        y = "Precision"
+    )
+
+svm_tune_pitching_results %>%
+    filter(.metric == "roc_auc") %>% 
+    ggplot(aes(x = cost, y = mean)) +
+    geom_line() +
+    labs(
+        title = "ROC_AUC Across Cost",
+        x = "Cost",
+        y = "ROC_AUC"
+    )
+
+svm_tune_pitching_results %>%
+    filter(.metric == "accuracy") %>% 
+    ggplot(aes(x = cost, y = mean)) +
+    geom_line() +
+    labs(
+        title = "Accuracy Across Cost",
+        x = "Cost",
+        y = "Accuracy"
+    )
+```
+
+```{r}
+#svm_tune %>%
+#  collect_metrics()
+```
+
+```{r}
+#| output: false
+svm_mod <- svm_linear(cost =5.042731e-03	, margin = 0.5) %>%
+  set_mode("classification") %>%
+  set_engine("kernlab")
+
+pitch_work <- workflow() %>%
+  add_model(svm_mod) %>%
+  add_recipe(pit_recipe)
+
+svm_fit <- pitch_work %>% 
+  fit(pit_df)
+```
+
+```{r}
+pit_df %>% 
+    mutate(
+        svm_pred = predict(svm_fit, new_data = pit_df)$.pred_class
+    ) %>% 
+    conf_mat(truth = Allstar_pitcher, 
+           estimate = svm_pred)
+```
+
+### Interpretation
+
+In our thorough analysis of metrics such as precision, recall, accuracy, ROC-AUC, specificity, and sensitivity for predicting All Star batters and pitchers, we successfully developed a reliable model exclusively for batters. This model remarkably misclassified only 36 athletes, leading to an precision of 0.9586, accuracy of 0.9543726 and a recall of 0.9946. On the other hand, the model for pitchers consistently followed the null classifier model, no matter the cost value, hence it is not useful.
+
+# 10. Neural Network
+
+After encountering suboptimal results with our previous machine learning methods, we attempted to deploy a neural network with hyperparameter tuning. Initially, we tried using the reticulate package in R to import Python packages like keras_tuner and TensorFlow. However, this approach presented challenges and led to increased rendering time. Hence, we switched to running a Jupyter notebook via Google Collab. In this setup, we tuned two distinct neural networks across three different learning rates: 1e-2, 1e-3, and 1e-4. Concurrently, we explored various neural network architectures using a Bayesian optimization tuner from the keras_tuner package. This tuner experimented with different numbers of nodes and layers to identify the optimal neural network structure. Additionally, we implemented dropout layers to combat overfitting by randomly removing neurons from the input and hidden layers of the neural network. Despite these efforts to fine-tune the architecture, the results from the neural network for both batters and pitchers did not yield significantly improved outcomes when precision was the prioritized metric. We have opted for precision as the key metric because our previous models did not always have high precision. Every tuning returns different results, but we kept getting low precision values for predicting All Star batters and pitchers. To provide a detailed insight into our approach the Jupyter notebook containing our code will be included as part of our final report submission.
+
+# 11. Conclusion
+
+After examining a variety of machine learning models and statistical methods, we had difficulties due to our extremely imbalanced data sets. For the pitchers, only 33 made the 2023 All-Star team, while 835 pitchers did not make the All-Star team. When groups are this imbalanced, making predictions is extremely difficult. When considering the best model, we analyzed the metrics of precision, accuracy, specificity, sensitivity, and recall into account. What took precedence is finding the model that correctly identifies the most All-Stars. MLB teams would be upset if the model they utilize to make decisions classifies an All-Star caliber player as not an All-Star. In other words, It is better to wrongly classify a non-All-Star as an All-Star than the flip side.
+
+With these objectives, the best resulting model for predicting All-Star pitchers is the tuned decision tree. This model correctly classified 27 out of the 33 All-Star pitchers, with an accuracy of 0.9920, precision of 0.9643, recall of 0.8181, and specificity of 0.9988. For the batters, only 44 made the 2023 All-Star team, while 745 batters did not make the All-Star team. The best resulting model for predicting All-Star batters is the tuned decision tree. This model correctly classified 30 out of the 33 All-Star pitchers, with an accuracy of 0.9721, precision of 0.7895, recall of 0.6818, specificity of 0.9893, and sensitivity of 0.6818. The decision trees had a set number of features, but we think interpreting based on which statistic is more important would be misguided. Therefore, we will not make a decision tree interpretation. It is also important to note that tuned KNN models performed perfectly for both the pitching and batting data. Meaning all All-Stars and non-All-Stars were correctly classified. We did not include this as our final model because we suspect an issue with that model. We also got different results each time we ran the code.
+
+While the performance metrics of our model for predicting All-Star batters are promising, it is vital to approach its application with caution, particularly for MLB teams considering its use. The models use only one year of training data, which is not enough for deployment for MLB teams. For a more robust assessment of the model's effectiveness, it would be beneficial to test and validate performance across multiple years.
+
+# 12. Limitations
+
+Our analysis could benefit baseball teams in making more efficient and streamlined decisions. This analysis is purely to improve MLB teams and optimize their future performance. If a player is wrongly classified, it will likely impact their contract bargaining power and could lead to a decrease or increase in salary, depending on the classification. A player who is beneficial to the team could be released from an MLB team if the decision was based solely on our model. Also, if players miss games, they will not have game statistics. These features include injuries, relationships with teammates, coaches, and management, suspensions, drugs and/or alcohol usage, mental health struggles, family situations, fan popularity, work ethic, or legal troubles. Without these statistics, we lack the information MLB teams need to make accurate predictions. That being said, MLB teams monitor their players very closely, so our models might be useful to them if they add these additional features. Hence, we have misclassifications because we lack these impactful variables. Additionally, our model is trained on 2022 MLB statistics and was compared with the 2023 All-Star selection. At this point, we only have a model fit for one season, and we cannot reasonably use this model to predict future seasons. We would be more confident in our model if we had many years of training data. Overall, we hypothesize that player performance is the prominent driver of All-Star selections for both pitchers and batters.
+
+# References
+
+Merrimack College. (2021, August 24). The latest data analytics tools in baseball. Merrimack College Online. <https://online.merrimack.edu/latest-data-analytics-tools-baseball/#:~:text=Collecting%20Data,Pitching%20velocity>
+
+Micah Melling. (2017, September 27). Using Machine Learning to Predict Baseball Hall of Famers -- Baseball Data Science. <https://www.baseballdatascience.com/using-machine-learning-to-predict-baseball-hall-of-famers/>
+
+Micah Melling. (2021, April 1). World Series predictions -- Baseball data science. <https://www.baseballdatascience.com/world-series-predictions/>
+
+Vinco, V. (2023). 2022 MLB Player Stats \[Data set\]. Kaggle.
+
+<https://www.kaggle.com/datasets/vivovinco/2022-mlb-player-stats>
